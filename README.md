@@ -63,10 +63,21 @@ Python 3.12 or newer is required.
 
 On PowerShell, activate with `.venv\Scripts\Activate.ps1` instead.
 
-## Safe local dry-run
+## Arch live-environment dry-run
 
-This mode writes only redacted review artifacts to the chosen output directory.
-It does not invoke `archinstall`:
+No installer CLI mode is a generic host-side configuration command. Every mode
+runs preflight and disk discovery first. Use `--dry-run` only in the official
+Arch live environment when all of these prerequisites are true:
+
+- the machine is x86-64, booted in UEFI mode, and has network access;
+- `/run/archiso/bootmnt` exists and its source is discoverable with `findmnt`;
+- `archinstall`, `findmnt`, `lsblk`, and `openssl` are installed;
+- an eligible target disk is visible and its device path and exact byte size
+  match the answer file.
+
+The mode does not invoke `archinstall` or modify the target disk, but it still
+requires disk discovery and answer-to-device reconciliation. From an activated
+environment installed from the writable repository copy described below, run:
 
     arch-hypr-installer --answers tests/fixtures/answers-amd-encrypted.json --dry-run --output-dir ./dry-run-output
 
@@ -74,10 +85,24 @@ Review `config.json`, `creds.example.json`, `profile-plan.json`, and the staged
 payload in `dry-run-output/`. The answer fixtures contain no passwords; secrets
 are requested interactively and must never be committed.
 
+Host-side development on ordinary Linux or Windows should use the pytest
+behavior tests (`python -m pytest -v`). They replace real preflight and disk
+discovery with controlled test boundaries and do not invoke a real target.
+
 ## Official Arch ISO upstream validation
 
-Boot the official Arch ISO in UEFI mode with networking, attach this repository
-read-only, and run the non-destructive smoke procedure:
+Boot the official Arch ISO in UEFI mode with networking and attach this
+repository read-only. Do not run the smoke script directly from that attachment:
+pip/setuptools may create in-place build metadata such as `*.egg-info`. Copy the
+source to a writable temporary workspace first (adjust `source_repo` to the
+actual read-only mount), then run the non-destructive smoke procedure:
+
+    source_repo=/mnt/readonly/MyLinux
+    work_dir="$(mktemp -d /tmp/arch-hypr-source.XXXXXX)"
+    trap 'rm -rf -- "$work_dir"' EXIT
+    cp -R -- "$source_repo" "$work_dir/repo"
+    chmod -R u+w "$work_dir/repo"
+    cd "$work_dir/repo"
 
     bash scripts/archiso-smoke.sh
 

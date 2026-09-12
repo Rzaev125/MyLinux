@@ -23,6 +23,22 @@ def test_archiso_smoke_validates_both_fixtures_without_installing():
     assert "--install" not in script
 
 
+def test_readme_requires_archiso_preflight_and_a_writable_smoke_copy():
+    readme = (REPO_ROOT / "README.md").read_text()
+    dry_run = readme.split("## Arch live-environment dry-run", 1)[1].split(
+        "## Official Arch ISO upstream validation", 1)[0]
+    smoke = readme.split("## Official Arch ISO upstream validation", 1)[1].split(
+        "## Real installation", 1)[0]
+    assert "/run/archiso/bootmnt" in dry_run
+    assert all(command in dry_run for command in ("archinstall", "findmnt", "lsblk", "openssl"))
+    assert "eligible target disk" in dry_run
+    assert "Host-side development" in dry_run
+    assert 'work_dir="$(mktemp -d /tmp/arch-hypr-source.XXXXXX)"' in smoke
+    assert 'cp -R -- "$source_repo" "$work_dir/repo"' in smoke
+    assert 'chmod -R u+w "$work_dir/repo"' in smoke
+    assert 'cd "$work_dir/repo"' in smoke
+
+
 @pytest.mark.parametrize("args", [[], ["--dry-run", "--install"], ["--install", "--output-dir", "out"], ["--dry-run"]])
 def test_invalid_cli_modes_exit_two(args):
     with pytest.raises(SystemExit) as caught:
