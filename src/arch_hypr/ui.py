@@ -77,7 +77,9 @@ def reconcile_answer_disk(choices: InstallChoices, eligible) -> InstallChoices:
     matches = [disk for disk in eligible if disk.path.as_posix() == choices.device.as_posix()]
     if len(matches) != 1:
         raise ValueError("answer device is not an eligible physical disk")
-    return replace(choices, device=matches[0].path, disk_size_bytes=matches[0].size_bytes)
+    if choices.disk_size_bytes != matches[0].size_bytes:
+        raise ValueError("answer disk size does not match the discovered disk")
+    return replace(choices, device=matches[0].path)
 
 
 def read_destructive_confirmation(device: Path, *, input_fn=input) -> str:

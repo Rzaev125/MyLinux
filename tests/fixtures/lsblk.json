@@ -1,11 +1,11 @@
 {
   "blockdevices": [
-    {"name":"nvme0n1","path":"/dev/nvme0n1","type":"disk","size":512110190592,"model":"Work SSD","ro":false,"rm":false,"mountpoints":[null],"pkname":null},
-    {"name":"sda","path":"/dev/sda","type":"disk","size":128035676160,"model":"Target SSD","ro":false,"rm":false,"mountpoints":[null],"pkname":null},
-    {"name":"sdb","path":"/dev/sdb","type":"disk","size":34359738368,"model":"ARCHISO","ro":false,"rm":true,"mountpoints":[null],"pkname":null,"children":[
-      {"name":"sdb1","path":"/dev/sdb1","type":"part","size":2147483648,"model":null,"ro":false,"rm":true,"mountpoints":["/run/archiso/bootmnt"],"pkname":"sdb"}
+    {"name":"nvme0n1","path":"/dev/nvme0n1","type":"disk","size":512110190592,"model":"Work SSD","serial":"WORK-001","wwn":"0x5000000000000001","ro":false,"rm":false,"mountpoints":[null],"pkname":null},
+    {"name":"sda","path":"/dev/sda","type":"disk","size":128035676160,"model":"Target SSD","serial":"TARGET-001","wwn":"0x5000000000000002","ro":false,"rm":false,"mountpoints":[null],"pkname":null},
+    {"name":"sdb","path":"/dev/sdb","type":"disk","size":34359738368,"model":"ARCHISO","serial":"LIVE-001","wwn":null,"ro":false,"rm":true,"mountpoints":[null],"pkname":null,"children":[
+      {"name":"sdb1","path":"/dev/sdb1","type":"part","size":2147483648,"model":null,"serial":null,"wwn":null,"ro":false,"rm":true,"mountpoints":["/run/archiso/bootmnt"],"pkname":"sdb"}
     ]},
-    {"name":"sdc","path":"/dev/sdc","type":"disk","size":34359738368,"model":"Read-only SSD","ro":true,"rm":false,"mountpoints":[null],"pkname":null},
-    {"name":"sdd","path":"/dev/sdd","type":"disk","size":4294967296,"model":"Too small","ro":false,"rm":false,"mountpoints":[null],"pkname":null}
+    {"name":"sdc","path":"/dev/sdc","type":"disk","size":34359738368,"model":"Read-only SSD","serial":"READONLY-001","wwn":null,"ro":true,"rm":false,"mountpoints":[null],"pkname":null},
+    {"name":"sdd","path":"/dev/sdd","type":"disk","size":4294967296,"model":"Too small","serial":"SMALL-001","wwn":null,"ro":false,"rm":false,"mountpoints":[null],"pkname":null}
   ]
 }

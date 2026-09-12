@@ -43,7 +43,7 @@ def test_discovery_resolves_archiso_source_with_findmnt_before_parsing_disks():
     assert [str(d.path) for d in eligible_disks(disks)] == ["/dev/nvme0n1", "/dev/sda"]
     assert runner.calls == [
         ("findmnt", "--noheadings", "--output", "SOURCE", "/run/archiso/bootmnt"),
-        ("lsblk", "--bytes", "--json", "-o", "NAME,PATH,TYPE,SIZE,MODEL,RO,RM,MOUNTPOINTS,PKNAME"),
+        ("lsblk", "--bytes", "--json", "-o", "NAME,PATH,TYPE,SIZE,MODEL,SERIAL,WWN,RO,RM,MOUNTPOINTS,PKNAME"),
     ]
 
 
@@ -116,3 +116,30 @@ def test_discovery_rejects_malformed_lsblk_json():
 
     with pytest.raises(DomainError, match="invalid JSON"):
         discover_disks(Runner())
+
+
+def test_optical_archiso_excludes_rom_without_blocking_target_discovery():
+    payload = json.loads(Path("tests/fixtures/lsblk-optical.json").read_text())
+    class OpticalRunner:
+        def run(self, argv, *, input_text=None):
+            if argv[0] == "findmnt":
+                return CommandResult(0, "/dev/sr0\n", "")
+            return CommandResult(0, json.dumps(payload), "")
+    disks = eligible_disks(discover_disks(OpticalRunner()))
+    assert [disk.path.as_posix() for disk in disks] == ["/dev/vda"]
+    assert disks[0].serial == "ARCH-HYPR-VM-001"
+    assert disks[0].wwn == "0x5000000000000001"
+    assert disks[0].fingerprint == ("/dev/vda", 68719476736, "Virtio Block Device", "ARCH-HYPR-VM-001", "0x5000000000000001")
+
+
+@pytest.mark.parametrize("source,kind", [("/dev/sr9", "rom"), ("/dev/sr0", "part"), ("/dev/sr0", "loop"), ("/dev/sr0", "unknown")])
+def test_optical_exception_does_not_allow_unknown_or_non_rom_live_sources(source, kind):
+    payload = json.loads(Path("tests/fixtures/lsblk-optical.json").read_text())
+    payload["blockdevices"][1]["type"] = kind
+    with pytest.raises(DomainError, match="live ISO source"):
+        parse_disks(payload, Path(source))
+
+
+def test_missing_live_source_is_fail_closed_even_at_parser_boundary():
+    with pytest.raises(DomainError, match="live ISO source"):
+        parse_disks(fixture_payload(), None)

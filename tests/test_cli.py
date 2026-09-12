@@ -8,6 +8,7 @@ from arch_hypr import cli
 from arch_hypr.cli import build_parser
 from arch_hypr.domain import Disk
 from arch_hypr.ui import collect_interactive, load_answers, read_destructive_confirmation
+from arch_hypr.ui import reconcile_answer_disk
 from test_orchestrator import InstallRunner
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -150,6 +151,13 @@ def configure(monkeypatch, tmp_path, *, runner=None, passwords=None):
 @pytest.mark.parametrize("fixture", ["answers-amd-encrypted.json", "answers-intel-plain.json"])
 def test_cli_dry_run_exports_only_redacted_artifacts(fixture, monkeypatch, tmp_path, capsys):
     runner = configure(monkeypatch, tmp_path)
+    real_temporary_directory = cli.tempfile.TemporaryDirectory
+    runtime_paths = []
+    def observe_temporary_directory(*args, **kwargs):
+        directory = real_temporary_directory(*args, **kwargs)
+        runtime_paths.append(Path(directory.name))
+        return directory
+    monkeypatch.setattr(cli.tempfile, "TemporaryDirectory", observe_temporary_directory)
     output = tmp_path / "out"
     assert cli.main(["--answers", str(FIXTURES / fixture), "--dry-run", "--output-dir", str(output)]) == 0
     assert (output / "config.json").is_file()
@@ -158,7 +166,7 @@ def test_cli_dry_run_exports_only_redacted_artifacts(fixture, monkeypatch, tmp_p
     assert json.loads((output / "creds.example.json").read_text()) == {"users": [{"username": "<redacted>", "enc_password": "<redacted>", "sudo": True}]}
     text = capsys.readouterr().out + "".join(p.read_text() for p in output.rglob("*") if p.is_file())
     assert all(secret not in text for secret in ("login-secret", "luks-secret", "$6$test-hash"))
-    assert not list(tmp_path.rglob("creds.json"))
+    assert runtime_paths and all(not path.exists() for path in runtime_paths)
     assert not any(argv[0] == "archinstall" for argv, _ in runner.calls)
 
 
@@ -285,3 +293,32 @@ def test_destructive_summary_has_disk_and_partition_details_before_confirmation(
     assert "1 GiB FAT32 ESP + Btrfs remainder" in summary
     assert ("LUKS2 enabled" if encryption else "LUKS2 disabled") in summary
     assert ("EXPERIMENTAL" in summary) == (hardware == "nvidia")
+    assert "TARGET-001" in summary and "0x5000000000000001" in summary
+
+
+def test_answer_disk_size_mismatch_is_rejected_instead_of_replaced(choices):
+    disk = Disk(Path("/dev/sda"), "Target", 128035676160, False, False)
+    with pytest.raises(ValueError, match="size"):
+        reconcile_answer_disk(choices, (disk,))
+
+
+def test_cli_preserves_selected_identity_across_confirmation(monkeypatch, tmp_path, capsys):
+    runner = configure(monkeypatch, tmp_path)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    def swap_while_confirming(prompt):
+        runner.serial = "REPLACEMENT"
+        return "/dev/sda"
+    monkeypatch.setattr("builtins.input", swap_while_confirming)
+    assert cli.main(["--answers", str(FIXTURES / "answers-amd-encrypted.json"), "--install"]) == 2
+    assert "disk" in capsys.readouterr().err
+    assert not any(argv[0] == "openssl" for argv, _ in runner.calls)
+
+
+def test_cli_dry_run_skips_host_preflight_and_upstream_version(monkeypatch, tmp_path):
+    runner = configure(monkeypatch, tmp_path)
+    def no_host_preflight():
+        pytest.fail("dry-run must not require root, UEFI, network or archinstall")
+    monkeypatch.setattr(cli, "preflight_errors", no_host_preflight)
+    monkeypatch.setattr("arch_hypr.orchestrator.preflight_errors", no_host_preflight)
+    assert cli.main(["--answers", str(FIXTURES / "answers-amd-encrypted.json"), "--dry-run", "--output-dir", str(tmp_path / "out")]) == 0
+    assert {argv[0] for argv, _ in runner.calls} == {"findmnt", "lsblk", "openssl"}

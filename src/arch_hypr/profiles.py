@@ -19,9 +19,9 @@ def compose_profile(hardware: HardwareProfile, software: SoftwareProfile) -> Pro
         load_profile(f"hardware/{hardware.value}.json"),
         load_profile(f"software/{software.value}.json"),
     )
-    versions = {layer["version"] for layer in layers}
-    if versions != {1}:
-        raise ValueError(f"incompatible profile versions: {sorted(versions)}")
+    versions = [layer["version"] for layer in layers]
+    if any(type(version) is not int or version != 1 for version in versions):
+        raise ValueError("incompatible profile versions: expected integer 1")
     return ProfilePlan(
         version=1,
         packages=_unique(pkg for layer in layers for pkg in layer["packages"]),

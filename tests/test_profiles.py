@@ -56,3 +56,12 @@ def test_manifest_has_versioned_schema():
         "experimental",
     }
     assert manifest["version"] == 1
+
+
+@pytest.mark.parametrize("version", [True, 1.0])
+def test_version_one_requires_an_actual_integer(version, monkeypatch):
+    def invalid_version(relative):
+        return load_profile(relative) | {"version": version}
+    monkeypatch.setattr("arch_hypr.profiles.load_profile", invalid_version)
+    with pytest.raises(ValueError, match="incompatible profile versions"):
+        compose_profile(HardwareProfile.AMD, SoftwareProfile.MINIMAL)

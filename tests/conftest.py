@@ -58,3 +58,11 @@ def plain_secrets():
 @pytest.fixture
 def fake_runner():
     return FakeRunner()
+
+
+@pytest.fixture(autouse=True)
+def target_root(tmp_path_factory, monkeypatch):
+    # No test may write to the host /mnt; only the external argv keeps that literal.
+    root = tmp_path_factory.mktemp("installer-target")
+    monkeypatch.setattr("arch_hypr.staging.TARGET_ROOT", root, raising=False)
+    return root

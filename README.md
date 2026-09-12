@@ -65,18 +65,20 @@ On PowerShell, activate with `.venv\Scripts\Activate.ps1` instead.
 
 ## Arch live-environment dry-run
 
-No installer CLI mode is a generic host-side configuration command. Every mode
-runs preflight and disk discovery first. Use `--dry-run` only in the official
-Arch live environment when all of these prerequisites are true:
+Every mode discovers the Arch ISO live source and eligible physical disks.
+`--dry-run` skips the x86-64, UEFI, root, network and upstream-version preflight;
+it does not invoke `archinstall` or `arch-chroot`. Use it in an Arch live
+environment with these prerequisites:
 
-- the machine is x86-64, booted in UEFI mode, and has network access;
 - `/run/archiso/bootmnt` exists and its source is discoverable with `findmnt`;
-- `archinstall`, `findmnt`, `lsblk`, and `openssl` are installed;
+- `findmnt`, `lsblk`, and `openssl` are installed;
 - an eligible target disk is visible and its device path and exact byte size
   match the answer file.
 
-The mode does not invoke `archinstall` or modify the target disk, but it still
-requires disk discovery and answer-to-device reconciliation. From an activated
+The mode writes a private temporary runtime and the requested redacted export;
+it does not partition, mount, chroot, enable services, or reboot. A mismatched
+answer-file byte size is rejected; it is never replaced with the discovered
+size. Serial/WWN may be unavailable in this non-destructive mode. From an activated
 environment installed from the writable repository copy described below, run:
 
     arch-hypr-installer --answers tests/fixtures/answers-amd-encrypted.json --dry-run --output-dir ./dry-run-output
@@ -107,22 +109,24 @@ actual read-only mount), then run the non-destructive smoke procedure:
     bash scripts/archiso-smoke.sh
 
 It creates a temporary virtual environment and submits both fixtures to
-`archinstall --dry-run` via the installer `--validate-upstream` mode. It never
+`archinstall --silent --dry-run` via the installer `--validate-upstream` mode. It never
 uses the installer `--install` mode.
 
-A mandatory ISO/VM validation is to prove that the staged
-`/run/arch-hypr-installer/payload` directory, especially `post_install.py`,
-remains visible and readable when archinstall runs the configured custom
-command. Host unit tests and exported dry-run artifacts do not prove this
-runtime mount-namespace boundary.
+The supported schema is pinned to upstream **archinstall 4.4**. The supplied
+`archlinux-2026.09.01-x86_64.iso` manifest lists `archinstall 4.4-1`,
+`arch-install-scripts 31-2`, and `python 3.14.7-1`. Validation and install require
+`arch-chroot`, `archinstall`, `findmnt`, `lsblk`, and `openssl`, plus x86-64,
+UEFI, root and network access. The installer checks `archinstall --version`
+before preparing private files and rejects other upstream versions.
 
-Target identity is not fully established by device path and byte size alone.
-Paths such as `/dev/sda` can be reassigned, and two disks can have the same
-capacity. This risk is not resolved: immediately before any real installation,
-re-check the selected path, model, serial/WWN, exact size, and disposable status
-against the VM definition or physical hardware.
+The smoke wrapper removes its own venv on exit. For standalone commands,
+create and activate a persistent operator venv in the writable workspace:
 
-For a single fixture without the wrapper:
+    python -m venv "$work_dir/operator-venv"
+    "$work_dir/operator-venv/bin/python" -m pip install --no-deps .
+    source "$work_dir/operator-venv/bin/activate"
+
+This venv stays available until the workspace cleanup trap runs. For a single fixture:
 
     arch-hypr-installer --answers tests/fixtures/answers-amd-encrypted.json --validate-upstream
 
@@ -138,6 +142,27 @@ typing the exact target device path.
 
 Do not use a fixture unchanged unless its device path and exact size describe
 the disposable target you independently verified.
+
+The final summary includes path, exact byte size, model, serial and WWN. The
+installer binds confirmation to that selected disk and compares the complete
+fingerprint on rediscovery immediately before upstream execution. Installation
+refuses a disk without either a nonempty serial or WWN. Configure a stable disk
+serial in the VM definition and independently verify its disposable attachment.
+Changing attachments after confirmation is unsupported; no path-based discovery
+can eliminate the final hotplug race between checking and opening a device.
+
+Only after successful archinstall execution, the installer copies validated
+staged resources into a fresh `/mnt/root/.arch-hypr-installer/payload` and runs:
+
+    arch-chroot /mnt /usr/bin/python /root/.arch-hypr-installer/payload/post_install.py --username USERNAME
+
+The username is validated and passed as one argument; no command shell is used.
+Existing target runtimes and linked path ancestors are rejected. The complete
+`/mnt/root/.arch-hypr-installer` directory is removed after success, failure or
+interruption. Validation and dry-run never copy or execute target payloads.
+The target payload deliberately lives outside `/run`: arch-chroot 31-2 bind-mounts
+the live `/run` over target `/run`. The ISO/VM gate must still prove installed
+profile application, service enablement and boot, including cleanup on failure.
 
 ## Logs and recovery evidence
 
@@ -159,6 +184,10 @@ and evidence are in the roadmap.
 - [Delivery roadmap](docs/superpowers/plans/2026-09-12-arch-hyprland-gpt-roadmap.md)
 - [Archinstall guided configuration and dry-run](https://archinstall.archlinux.page/installing/guided.html)
 - [Archinstall disk and Btrfs schema](https://archinstall.archlinux.page/cli_parameters/config/disk_config.html)
+- [Pinned archinstall 4.4 partition parser](https://github.com/archlinux/archinstall/blob/4.4/archinstall/lib/models/device.py)
+- [Pinned archinstall 4.4 config and credentials parser](https://github.com/archlinux/archinstall/blob/4.4/archinstall/lib/args.py)
+- [Pinned archinstall 4.4 repositories parser](https://github.com/archlinux/archinstall/blob/4.4/archinstall/lib/models/mirrors.py)
+- [Official arch-install-scripts 31-2 package](https://archive.archlinux.org/packages/a/arch-install-scripts/arch-install-scripts-31-2-any.pkg.tar.zst)
 - [Hyprland Lua configuration entry point](https://wiki.hypr.land/Configuring/Start/)
 - [Official Arch Hyprland package](https://archlinux.org/packages/extra/x86_64/hyprland/)
 - [Official Arch greetd-tuigreet package](https://archlinux.org/packages/extra/x86_64/greetd-tuigreet/)

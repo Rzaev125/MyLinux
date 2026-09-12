@@ -28,6 +28,16 @@ class Disk:
     removable: bool
     read_only: bool
     live_media: bool = False
+    serial: str | None = None
+    wwn: str | None = None
+
+    @property
+    def fingerprint(self) -> tuple:
+        return (self.path.as_posix(), self.size_bytes, self.model, self.serial, self.wwn)
+
+    @property
+    def has_stable_id(self) -> bool:
+        return any(isinstance(value, str) and bool(value.strip()) for value in (self.serial, self.wwn))
 
 
 @dataclass(frozen=True)

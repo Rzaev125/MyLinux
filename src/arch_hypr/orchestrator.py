@@ -4,11 +4,11 @@ from enum import StrEnum
 from pathlib import Path
 import os
 
-from .archinstall_adapter import archinstall_argv, build_payload, hash_secrets, write_secure_payload
+from .archinstall_adapter import archinstall_argv, build_payload, hash_secrets, write_secure_payload, require_supported_archinstall
 from .disks import discover_disks, eligible_disks, require_exact_confirmation
 from .preflight import collect_preflight, online_probe, validate_preflight
 from .profiles import compose_profile
-from .staging import is_link, stage_payload
+from .staging import installed_payload, is_link, stage_payload
 
 
 def preflight_errors() -> tuple[str, ...]:
@@ -30,16 +30,21 @@ class PreparedInstall:
 
 
 class InstallerOrchestrator:
-    def __init__(self, runner, runtime_dir=Path("/run/arch-hypr-installer"), *, preflight=None):
+    def __init__(self, runner, runtime_dir=Path("/run/arch-hypr-installer"), *, preflight=None, selected_disk=None):
         self.runner = runner
         self.runtime_dir = Path(runtime_dir)
         self.preflight = preflight if preflight is not None else preflight_errors
+        self.selected_disk = selected_disk
 
-    def _verify_disk(self, choices):
+    def _verify_disk(self, choices, expected):
         disks = eligible_disks(discover_disks(self.runner))
         matches = [disk for disk in disks if disk.path.as_posix() == choices.device.as_posix()]
         if len(matches) != 1 or matches[0].size_bytes != choices.disk_size_bytes:
             raise ValueError("selected disk identity or size no longer matches an eligible physical disk")
+        current = matches[0]
+        if expected is not None and current.fingerprint != expected.fingerprint:
+            raise ValueError("selected disk fingerprint no longer matches the confirmed disk")
+        return current
 
     def _check_fresh_paths(self):
         for path in (self.runtime_dir, *self.runtime_dir.parents):
@@ -76,16 +81,22 @@ class InstallerOrchestrator:
         mode = InstallMode(mode)
         if mode is InstallMode.INSTALL:
             require_exact_confirmation(choices.device, confirmation or "")
+            if self.selected_disk is None:
+                raise ValueError("initially selected disk is required for installation")
+            if not self.selected_disk.has_stable_id:
+                raise ValueError("selected disk requires a stable serial or WWN for installation")
         if mode is not InstallMode.DRY_RUN:
             errors = self.preflight()
             if errors:
                 raise ValueError("; ".join(errors))
-        self._verify_disk(choices)
+        selected_disk = self._verify_disk(choices, self.selected_disk)
         self._check_fresh_paths()
+        if mode is not InstallMode.DRY_RUN:
+            require_supported_archinstall(self.runner)
         try:
             prepared = self.prepare(choices, plain_secrets)
             if mode is not InstallMode.DRY_RUN:
-                self._verify_disk(choices)
+                self._verify_disk(choices, selected_disk)
                 print("Validating upstream configuration" if mode is InstallMode.VALIDATE_UPSTREAM else "Installing selected disk")
                 try:
                     result = self.runner.run(archinstall_argv(
@@ -98,6 +109,20 @@ class InstallerOrchestrator:
                 if result.returncode != 0:
                     code = result.returncode if type(result.returncode) is int else "unknown"
                     raise RuntimeError(f"archinstall failed (exit {code}); inspect local archinstall logs")
+                if mode is InstallMode.INSTALL:
+                    print("Applying installed profile")
+                    with installed_payload(prepared.payload_dir):
+                        try:
+                            result = self.runner.run((
+                                "arch-chroot", "/mnt", "/usr/bin/python",
+                                "/root/.arch-hypr-installer/payload/post_install.py",
+                                "--username", choices.username,
+                            ))
+                        except Exception:
+                            raise RuntimeError("post-install execution failed; inspect the installed system") from None
+                        if result.returncode != 0:
+                            code = result.returncode if type(result.returncode) is int else "unknown"
+                            raise RuntimeError(f"post-install failed (exit {code}); inspect the installed system")
             return prepared
         finally:
             try:

@@ -11,7 +11,7 @@ FINDMNT_ARGS = (
 )
 LSBLK_ARGS = (
     "lsblk", "--bytes", "--json", "-o",
-    "NAME,PATH,TYPE,SIZE,MODEL,RO,RM,MOUNTPOINTS,PKNAME",
+    "NAME,PATH,TYPE,SIZE,MODEL,SERIAL,WWN,RO,RM,MOUNTPOINTS,PKNAME",
 )
 
 
@@ -23,17 +23,24 @@ def _walk_devices(devices: list[dict], disk_ancestor: dict | None = None):
 
 
 def parse_disks(payload: dict, live_source: Path | None) -> tuple[Disk, ...]:
+    if live_source is None:
+        raise DomainError("live ISO source is required")
     devices = tuple(_walk_devices(payload.get("blockdevices", [])))
     live_disk_path = None
     if live_source is not None:
         source = live_source.as_posix()
+        found = False
         for item, disk_ancestor in devices:
             if item.get("path") == source:
+                found = True
+                if disk_ancestor is None and item.get("type") == "rom":
+                    # An observed optical source cannot be a type=disk target.
+                    break
                 if disk_ancestor is None or not disk_ancestor.get("path"):
                     raise DomainError("live ISO source has no disk ancestor")
                 live_disk_path = disk_ancestor["path"]
                 break
-        if live_disk_path is None:
+        if not found:
             raise DomainError("live ISO source was not found in lsblk")
 
     result = []
@@ -42,11 +49,13 @@ def parse_disks(payload: dict, live_source: Path | None) -> tuple[Disk, ...]:
             continue
         result.append(Disk(
             path=PurePosixPath(item["path"]),
-            model=(item.get("model") or "Unknown disk").strip(),
+            model=item.get("model") or "Unknown disk",
             size_bytes=int(item["size"]),
             removable=bool(item.get("rm")),
             read_only=bool(item.get("ro")),
             live_media=item.get("path") == live_disk_path,
+            serial=item.get("serial"),
+            wwn=item.get("wwn"),
         ))
     return tuple(result)
 

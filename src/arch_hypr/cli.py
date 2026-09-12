@@ -71,6 +71,7 @@ def main(argv=None) -> int:
               f"{choices.hostname}; user {choices.username}; {choices.hardware.value}/{choices.software.value}; "
               f"LUKS2 {'enabled' if choices.encryption else 'disabled'}")
         print(f"Disk model: {selected_disk.model}")
+        print(f"Disk serial: {selected_disk.serial or 'unavailable'}; WWN: {selected_disk.wwn or 'unavailable'}")
         print("Partition scheme: 1 GiB FAT32 ESP + Btrfs remainder")
         print(f"Timezone: {choices.timezone}; keymap: {choices.keymap}; locale: {choices.locale}")
         print("Packages: " + ", ".join(profile.packages))
@@ -91,7 +92,7 @@ def main(argv=None) -> int:
                     raise ValueError("runtime directory must not contain links")
             runtime.mkdir(mode=0o700, parents=True)
             owned_runtime = True
-        prepared = InstallerOrchestrator(runner, runtime_dir=runtime).execute(choices, plain, mode, confirmation)
+        prepared = InstallerOrchestrator(runner, runtime_dir=runtime, selected_disk=selected_disk).execute(choices, plain, mode, confirmation)
         if mode is InstallMode.DRY_RUN:
             _export(prepared, args.output_dir)
     except KeyboardInterrupt:

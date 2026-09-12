@@ -8,7 +8,7 @@ import shutil
 import subprocess
 
 
-PAYLOAD = Path("/run/arch-hypr-installer/payload")
+PAYLOAD = Path("/root/.arch-hypr-installer/payload")
 USERNAME = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
 SERVICE = re.compile(r"[A-Za-z0-9][A-Za-z0-9@_.:-]*[.]service")
 USER_OWNED = frozenset({Path(".config/hypr/local/overrides.lua")})
@@ -139,7 +139,7 @@ def apply_payload(*, payload, root, username, account, run_command) -> None:
     if not plan_path.is_file():
         raise RuntimeError("profile plan is not a file")
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
-    if plan["username"] != username or plan["profile_version"] != 1:
+    if plan["username"] != username or type(plan["profile_version"]) is not int or plan["profile_version"] != 1:
         raise RuntimeError("profile plan identity mismatch")
     services = plan["services"]
     if not isinstance(services, list) or not all(

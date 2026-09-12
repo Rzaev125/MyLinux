@@ -1,0 +1,7 @@
+{
+  "blockdevices": [
+    {"name":"loop0","path":"/dev/loop0","type":"loop","size":8589934592,"model":null,"serial":null,"wwn":null,"ro":true,"rm":false,"mountpoints":["/run/archiso/airootfs"],"pkname":null},
+    {"name":"sr0","path":"/dev/sr0","type":"rom","size":1608286208,"model":"QEMU DVD-ROM","serial":"QM00001","wwn":null,"ro":true,"rm":true,"mountpoints":["/run/archiso/bootmnt"],"pkname":null},
+    {"name":"vda","path":"/dev/vda","type":"disk","size":68719476736,"model":"Virtio Block Device","serial":"ARCH-HYPR-VM-001","wwn":"0x5000000000000001","ro":false,"rm":false,"mountpoints":[null],"pkname":null}
+  ]
+}

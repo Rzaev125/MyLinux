@@ -8,7 +8,7 @@ The approved specification contains four independently testable subsystems. Each
 
 Deliver a Python package that runs from the official Arch ISO, validates the environment and target disk, produces versioned `archinstall` config/creds files, installs the approved Btrfs/LUKS layout, and applies an idempotent base Hyprland profile.
 
-Exit gate: unit tests pass, upstream `archinstall --dry-run` accepts both encrypted and unencrypted fixtures, and a disposable UEFI VM reaches the greetd login screen.
+Exit gate: unit tests pass, upstream `archinstall --silent --dry-run` accepts both encrypted and unencrypted fixtures, and a disposable UEFI VM reaches the greetd login screen.
 
 Detailed plan: `docs/superpowers/plans/2026-09-12-installer-profile-foundation.md`
 
@@ -30,15 +30,27 @@ available, so no ISO boot or destructive installation was attempted.
 
 ### Local automated checks
 
-- `python -m pytest tests/test_cli.py -v`: `49 passed` after the required
-  missing-script RED failure (`1 failed, 48 passed`).
-- `python -m pytest -v`: `122 passed, 4 skipped` on Windows with Python 3.14.3.
-- `python -m pytest --cov=arch_hypr --cov-report=term-missing`:
-  `122 passed, 4 skipped`; overall coverage `94%` (`481/510` statements).
+- Final fix-wave: `python -m pytest -v`: `199 passed, 4 skipped` on Windows
+  with Python 3.14.3 (203 collected). Three POSIX permission/ownership checks
+  and one unavailable file-symlink check were skipped; directory-junction
+  containment tests ran.
+- `python -m pytest --cov=arch_hypr --cov-report=term-missing --cov-fail-under=90`:
+  `199 passed, 4 skipped`; overall coverage `96.17%` (`602/626` statements).
   Device confirmation, preflight rejection, secret redaction, profile
   composition, and mode-selection behavior are exercised by the suite.
 - `git diff --check`: exit 0; only Git's existing LF-to-CRLF working-copy
   warnings were emitted.
+- Wheel built from a temporary writable copy with `pip wheel --no-deps
+  --no-build-isolation`. All 18 packaged resources were verified byte-for-byte;
+  staging directly from the wheel included hidden Hyprland Lua and zram config.
+- Schema checked against official archinstall tag `4.4`, commit
+  `3ece182d31dda7b14abd56d13abf3ff79a5717ae`. Exact partition geometry, optional
+  repositories, credentials and argv are covered. A separate read-only probe
+  ran tagged `MirrorConfiguration.parse_args` and `Repository` on four generated
+  configurations with inert empty custom-repository dependencies; normalized
+  minimal/gaming repositories matched. This is not full ISO parser acceptance.
+- ISO manifest: `archinstall 4.4-1`, `arch-install-scripts 31-2`,
+  `python 3.14.7-1`. Validation/install reject another upstream archinstall version.
 - `bash -n scripts/archiso-smoke.sh`: unavailable on this host. The only
   `bash.exe` is a WSL relay and reports that `/bin/bash` does not exist;
   ShellCheck is also not installed. The pytest smoke contract confirms both
@@ -48,13 +60,18 @@ available, so no ISO boot or destructive installation was attempted.
 ### Required ISO and disposable-VM gates
 
 - **PENDING - upstream validation:** boot the ISO in a disposable UEFI VM,
-  attach this repository read-only, and run `bash scripts/archiso-smoke.sh`.
+  attach this repository read-only, copy it into a writable temporary workspace
+  using the README procedure, and run `bash scripts/archiso-smoke.sh` there.
+  Configure the VM disk with a stable serial; adjust both answer files to the
+  independently verified path and exact byte size. Mismatched sizes are rejected.
   Both `answers-amd-encrypted.json` and `answers-intel-plain.json` must be
-  accepted by upstream `archinstall --dry-run`; no virtual disk may be modified.
-- **PENDING - payload visibility:** ISO/VM validation must explicitly prove that
-  `/run/arch-hypr-installer/payload`, including `post_install.py`, is visible
-  and readable when archinstall executes the custom command. Host tests do not
-  validate this mount-namespace/runtime boundary.
+  accepted by upstream `archinstall --silent --dry-run`; no virtual disk may be modified.
+- **PENDING - target profile execution:** verify the explicit transfer to
+  `/mnt/root/.arch-hypr-installer/payload`, argv-only `arch-chroot /mnt /usr/bin/python
+  /root/.arch-hypr-installer/payload/post_install.py --username USERNAME`, and
+  removal of `/mnt/root/.arch-hypr-installer` after success/failure. The official
+  31-2 arch-chroot package binds live `/run` over target `/run`; that discovery
+  ruled out a target `/mnt/run` copy. No archinstall custom command is used.
 - **PENDING - encrypted full-disk install:** planned fixture
   `answers-amd-encrypted.json`; VM firmware and virtual disk size are not
   recorded because no VM target was created or selected.
@@ -62,10 +79,11 @@ available, so no ISO boot or destructive installation was attempted.
   expected subvolumes, NetworkManager and greetd enablement, profile version,
   systemd-boot, LUKS unlock, greetd login, modular Hyprland Lua launch, and
   idempotent profile re-application.
-- **Unresolved target-identity risk:** the current safety boundary reconciles
-  device path and byte size, but those are not a unique disk identity. Before
-  any destructive run, assert the disposable target's path, model, serial/WWN,
-  exact size, and VM attachment; do not treat path-plus-size as sufficient.
+- **Target identity:** the selected path, exact byte size, model, serial and WWN
+  are bound to confirmation and compared on final rediscovery. Installation
+  refuses disks missing both stable identifiers. Independently verify the VM
+  attachment and do not hotplug after confirmation; a final check/open race
+  remains inherent in invoking upstream against a device path.
 
 The Phase 2 implementation gate remains closed until every pending item above
 has real, dated evidence from the official ISO and the explicitly disposable VM.

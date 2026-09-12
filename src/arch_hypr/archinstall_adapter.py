@@ -10,6 +10,9 @@ from .domain import HashedSecrets, InstallChoices, ProfilePlan
 MIB = 1024**2
 GIB = 1024**3
 ID_NAMESPACE = UUID("0b46aa56-ad54-4ac2-90c7-413040898e33")
+# Official ISO 2026.09.01 ships archinstall 4.4-1 (Python metadata: 4.4).
+# Schema: https://github.com/archlinux/archinstall/tree/4.4
+SUPPORTED_ARCHINSTALL_VERSION = "4.4"
 
 
 @dataclass(frozen=True)
@@ -27,14 +30,14 @@ def build_payload(
 ) -> ArchinstallPayload:
     if choices.encryption and not secrets.luks_passphrase:
         raise ValueError("LUKS passphrase is required when encryption is enabled")
-    if not choices.encryption and secrets.luks_passphrase:
+    if not choices.encryption and secrets.luks_passphrase is not None:
         raise ValueError("LUKS passphrase must be absent when encryption is disabled")
 
     device = choices.device.as_posix()
     esp_id = str(uuid5(ID_NAMESPACE, f"{device}:esp"))
     root_id = str(uuid5(ID_NAMESPACE, f"{device}:root"))
     root_start = GIB + MIB
-    root_length = choices.disk_size_bytes - root_start - MIB
+    root_length = ((choices.disk_size_bytes - root_start - MIB) // MIB) * MIB
     partitions = [
         {
             "btrfs": [],
@@ -44,7 +47,8 @@ def build_payload(
             "mountpoint": "/boot",
             "obj_id": esp_id,
             "start": _size(MIB),
-            "length": _size(GIB),
+            "size": _size(GIB),
+            "dev_path": None,
             "status": "create",
             "type": "primary",
         },
@@ -61,13 +65,19 @@ def build_payload(
             "mountpoint": None,
             "obj_id": root_id,
             "start": _size(root_start),
-            "length": _size(root_length),
+            "size": _size(root_length),
+            "dev_path": None,
             "status": "create",
             "type": "primary",
         },
     ]
     config = {
-        "additional-repositories": list(profile.repositories),
+        "mirror_config": {
+            "mirror_regions": {},
+            "custom_servers": [],
+            "optional_repositories": list(profile.repositories),
+            "custom_repositories": [],
+        },
         "bootloader_config": {
             "bootloader": "Systemd-boot",
             "uki": False,
@@ -97,9 +107,6 @@ def build_payload(
         "silent": True,
         "swap": False,
         "timezone": choices.timezone,
-        "custom_commands": [
-            f"/usr/bin/python /run/arch-hypr-installer/payload/post_install.py --username {choices.username}"
-        ],
     }
     creds = {
         "users": [
@@ -115,7 +122,7 @@ def build_payload(
             "encryption_type": "luks",
             "partitions": [root_id],
         }
-        creds["!encryption-password"] = secrets.luks_passphrase
+        creds["encryption_password"] = secrets.luks_passphrase
     return ArchinstallPayload(config, creds)
 
 
@@ -130,10 +137,11 @@ def hash_secrets(plain, runner) -> HashedSecrets:
     return HashedSecrets(password_hash, plain.luks_passphrase)
 
 
-def _write_private_json(path: Path, value: dict) -> None:
+def _write_private_json(path: Path, value: dict, created: list[Path]) -> None:
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     flags |= getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(path, flags, 0o600)
+    created.append(path)
     with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
         json.dump(value, stream, ensure_ascii=False, sort_keys=True)
         stream.write("\n")
@@ -155,8 +163,30 @@ def write_secure_payload(
     payload: ArchinstallPayload, config: Path, creds: Path
 ) -> None:
     _validate_destinations(config, creds)
-    _write_private_json(config, payload.config)
-    _write_private_json(creds, payload.creds)
+    created: list[Path] = []
+    try:
+        _write_private_json(config, payload.config, created)
+        _write_private_json(creds, payload.creds, created)
+    except BaseException:
+        cleanup_failed = False
+        for path in reversed(created):
+            try:
+                path.unlink(missing_ok=True)
+            except (OSError, KeyboardInterrupt):
+                cleanup_failed = True
+        if cleanup_failed:
+            raise RuntimeError("payload cleanup failed; private files may remain") from None
+        raise
+
+
+def require_supported_archinstall(runner) -> None:
+    message = f"supported archinstall {SUPPORTED_ARCHINSTALL_VERSION} is required"
+    try:
+        result = runner.run(("archinstall", "--version"))
+    except Exception:
+        raise RuntimeError(message) from None
+    if result.returncode != 0 or result.stdout.strip() != f"archinstall {SUPPORTED_ARCHINSTALL_VERSION}":
+        raise RuntimeError(message)
 
 
 def archinstall_argv(
@@ -168,6 +198,8 @@ def archinstall_argv(
         config.as_posix(),
         "--creds",
         creds.as_posix(),
+        "--silent",
     ]
-    args.append("--dry-run" if dry_run else "--silent")
+    if dry_run:
+        args.append("--dry-run")
     return tuple(args)

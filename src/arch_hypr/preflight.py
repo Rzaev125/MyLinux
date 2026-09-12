@@ -7,7 +7,7 @@ import shutil
 import urllib.request
 
 
-REQUIRED_COMMANDS = frozenset({"archinstall", "lsblk", "findmnt", "openssl"})
+REQUIRED_COMMANDS = frozenset({"archinstall", "arch-chroot", "lsblk", "findmnt", "openssl"})
 
 
 @dataclass(frozen=True)
@@ -37,10 +37,10 @@ def validate_preflight(facts: PreflightFacts) -> tuple[str, ...]:
 
 def online_probe() -> bool:
     try:
-        urllib.request.urlopen("https://archlinux.org/", timeout=5)
+        with urllib.request.urlopen("https://archlinux.org/", timeout=5):
+            return True
     except OSError:
         return False
-    return True
 
 
 def collect_preflight(online_probe: Callable[[], bool]) -> PreflightFacts:
