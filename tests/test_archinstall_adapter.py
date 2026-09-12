@@ -68,6 +68,20 @@ def test_encrypted_payload_has_expected_layout_and_separate_secret():
     assert "luks-secret" not in repr(payload)
 
 
+def test_boot_partition_is_discoverable_as_efi_by_archinstall_44():
+    payload = build_payload(
+        choices(True), HashedSecrets("$6$hash", "luks-secret"), profile()
+    )
+    boot_partition = payload.config["disk_config"]["device_modifications"][0][
+        "partitions"
+    ][0]
+
+    # archinstall 4.4's PartitionModification.is_efi() requires the ESP flag;
+    # Systemd-boot also consumes the boot flag when selecting the boot partition.
+    parsed_flags = set(boot_partition["flags"])
+    assert {"boot", "esp"} <= parsed_flags
+
+
 def test_plain_payload_omits_disk_encryption_and_luks_secret():
     payload = build_payload(choices(False), HashedSecrets("$6$hash", None), profile())
     assert "disk_encryption" not in payload.config
@@ -222,7 +236,7 @@ def test_partition_shape_consumed_by_archinstall_44_parser(encrypted):
     assert esp["size"]["value"] == 1073741824
     assert root["start"]["value"] == 1074790400
     assert root["size"]["value"] == 67643637760
-    assert esp["flags"] == ["boot"] and esp["fs_type"] == "fat32"
+    assert esp["flags"] == ["boot", "esp"] and esp["fs_type"] == "fat32"
     assert root["fs_type"] == "btrfs" and root["mount_options"] == ["compress=zstd"]
     assert root["btrfs"] == [{"name": "@", "mountpoint": "/"}, {"name": "@home", "mountpoint": "/home"}, {"name": "@snapshots", "mountpoint": "/.snapshots"}, {"name": "@var_log", "mountpoint": "/var/log"}]
     assert payload.config["bootloader_config"] == {"bootloader": "Systemd-boot", "uki": False, "removable": False}

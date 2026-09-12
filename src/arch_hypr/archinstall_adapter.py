@@ -41,7 +41,7 @@ def build_payload(
     partitions = [
         {
             "btrfs": [],
-            "flags": ["boot"],
+            "flags": ["boot", "esp"],
             "fs_type": "fat32",
             "mount_options": [],
             "mountpoint": "/boot",
