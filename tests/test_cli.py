@@ -36,7 +36,7 @@ def test_upstream_password_hash_is_not_disclosed(raises, monkeypatch, tmp_path, 
     assert cli.main(["--answers", str(FIXTURES / "answers-amd-encrypted.json"), "--validate-upstream"]) == 2
     captured = capsys.readouterr()
     assert "$6$test-hash" not in captured.out + captured.err
-    assert "<redacted>" in captured.err
+    assert "archinstall" in captured.err and "local" in captured.err
     assert not (tmp_path / "runtime").exists()
 
 
@@ -47,6 +47,28 @@ def test_existing_runtime_is_never_removed(monkeypatch, tmp_path):
     (runtime / "creds.json").write_text("existing user data")
     assert cli.main(["--answers", str(FIXTURES / "answers-amd-encrypted.json"), "--validate-upstream"]) == 2
     assert (runtime / "creds.json").read_text() == "existing user data"
+
+
+@pytest.mark.parametrize("encoding", [str, json.dumps, repr])
+@pytest.mark.parametrize("exception", [None, RuntimeError, ValueError, OSError])
+def test_upstream_diagnostics_never_echo_untrusted_text(encoding, exception, monkeypatch, tmp_path, capsys):
+    login, luks = "login\\secret\t'\"", "luks\\secret\n'\""
+    diagnostic = "UNTRUSTED " + encoding([login, luks, "$6$test-hash"])
+    runner = InstallRunner(upstream_error=diagnostic)
+    if exception is not None:
+        def fail():
+            raise exception(diagnostic)
+        runner.on_install = fail
+    configure(monkeypatch, tmp_path, runner=runner, passwords=[login, login, luks])
+    assert cli.main(["--answers", str(FIXTURES / "answers-amd-encrypted.json"), "--validate-upstream"]) == 2
+    captured = capsys.readouterr()
+    text = captured.out + captured.err
+    assert "UNTRUSTED" not in text
+    assert "secret" not in text and "$6$test-hash" not in text
+    assert "archinstall" in captured.err and "local" in captured.err
+    if exception is None:
+        assert "1" in captured.err
+    assert not (tmp_path / "runtime").exists()
 
 
 @pytest.mark.parametrize("changes", [{"login_password": "secret"}, {"encryption": "false"}, {"disk_size_bytes": True}, {"hardware": "bogus"}, {"device": 12}])
@@ -130,7 +152,7 @@ def test_cli_errors_redact_known_secrets_and_clean_runtime(secret, monkeypatch, 
     assert cli.main(["--answers", str(FIXTURES / "answers-amd-encrypted.json"), "--validate-upstream"]) == 2
     captured = capsys.readouterr()
     text = captured.out + captured.err
-    assert "<redacted>" in text
+    assert "archinstall" in text and "local" in text
     assert "login-secret" not in text and "luks-secret" not in text
     assert not (tmp_path / "runtime").exists()
 
@@ -147,3 +169,93 @@ def test_cli_install_confirmation_after_summary_before_hashing(typed, expected, 
     assert cli.main(["--answers", str(FIXTURES / "answers-amd-encrypted.json"), "--install"]) == expected
     assert any(argv[0] == "archinstall" for argv, _ in runner.calls) == (expected == 0)
     assert not (tmp_path / "runtime").exists()
+
+
+@pytest.mark.parametrize("upstream_fails", [False, True])
+def test_runtime_cleanup_failure_returns_two_without_completion(upstream_fails, monkeypatch, tmp_path, capsys):
+    runner = InstallRunner(upstream_error="failed" if upstream_fails else None)
+    configure(monkeypatch, tmp_path, runner=runner)
+    remove = cli.shutil.rmtree
+    output_before_cleanup = []
+    def denied(path, *args, **kwargs):
+        if Path(path) == tmp_path / "runtime":
+            output_before_cleanup.append(capsys.readouterr().out)
+            raise PermissionError("UNTRUSTED login-secret luks-secret $6$test-hash")
+        return remove(path, *args, **kwargs)
+    monkeypatch.setattr(cli.shutil, "rmtree", denied)
+    assert cli.main(["--answers", str(FIXTURES / "answers-amd-encrypted.json"), "--validate-upstream"]) == 2
+    captured = capsys.readouterr()
+    assert output_before_cleanup and all("Completed" not in text for text in output_before_cleanup)
+    assert "cleanup" in captured.err.lower()
+    assert "UNTRUSTED" not in captured.err and "secret" not in captured.err
+    assert "Completed" not in captured.out
+    assert not (tmp_path / "runtime" / "creds.json").exists()
+
+
+def test_credential_cleanup_failure_is_a_safe_cli_error(monkeypatch, tmp_path, capsys):
+    configure(monkeypatch, tmp_path)
+    unlink = Path.unlink
+    def denied(path, *args, **kwargs):
+        if path.name == "creds.json":
+            raise PermissionError("UNTRUSTED $6$test-hash")
+        return unlink(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "unlink", denied)
+    assert cli.main(["--answers", str(FIXTURES / "answers-amd-encrypted.json"), "--validate-upstream"]) == 2
+    captured = capsys.readouterr()
+    assert "cleanup" in captured.err.lower()
+    assert "UNTRUSTED" not in captured.err and "$6$test-hash" not in captured.err
+    assert "Completed" not in captured.out
+    assert not (tmp_path / "runtime").exists()
+
+
+def test_dry_run_cleanup_failure_returns_two(monkeypatch, tmp_path, capsys):
+    configure(monkeypatch, tmp_path)
+    cleanup = cli.tempfile.TemporaryDirectory.cleanup
+    output_before_cleanup = []
+    def fail_after_removal(directory):
+        output_before_cleanup.append(capsys.readouterr().out)
+        cleanup(directory)
+        raise PermissionError("UNTRUSTED escaped-login-secret")
+    monkeypatch.setattr(cli.tempfile.TemporaryDirectory, "cleanup", fail_after_removal)
+    assert cli.main(["--answers", str(FIXTURES / "answers-amd-encrypted.json"), "--dry-run", "--output-dir", str(tmp_path / "out")]) == 2
+    captured = capsys.readouterr()
+    assert output_before_cleanup and all("Completed" not in text for text in output_before_cleanup)
+    assert "cleanup" in captured.err.lower()
+    assert "UNTRUSTED" not in captured.err
+    assert "Completed" not in captured.out
+
+
+def test_upstream_keyboard_interrupt_cleans_without_completion(monkeypatch, tmp_path, capsys):
+    runner = configure(monkeypatch, tmp_path)
+    def interrupt():
+        raise KeyboardInterrupt("UNTRUSTED login-secret")
+    runner.on_install = interrupt
+    assert cli.main(["--answers", str(FIXTURES / "answers-amd-encrypted.json"), "--validate-upstream"]) == 2
+    captured = capsys.readouterr()
+    assert "interrupt" in captured.err.lower()
+    assert "UNTRUSTED" not in captured.err
+    assert "Completed" not in captured.out
+    assert not (tmp_path / "runtime").exists()
+
+
+@pytest.mark.parametrize("hardware,encryption", [("amd", True), ("nvidia", False)])
+def test_destructive_summary_has_disk_and_partition_details_before_confirmation(hardware, encryption, monkeypatch, tmp_path, capsys):
+    data = json.loads((FIXTURES / "answers-amd-encrypted.json").read_text())
+    data.update(hardware=hardware, encryption=encryption)
+    answers = tmp_path / "answers.json"
+    answers.write_text(json.dumps(data))
+    configure(monkeypatch, tmp_path)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    summaries = []
+    def confirm(prompt):
+        summaries.append(capsys.readouterr().out)
+        return "/dev/sda"
+    monkeypatch.setattr("builtins.input", confirm)
+    assert cli.main(["--answers", str(answers), "--install"]) == 0
+    assert len(summaries) == 1
+    summary = summaries[0]
+    assert "/dev/sda" in summary and "Target" in summary
+    assert "68719476736 bytes" in summary
+    assert "1 GiB FAT32 ESP + Btrfs remainder" in summary
+    assert ("LUKS2 enabled" if encryption else "LUKS2 disabled") in summary
+    assert ("EXPERIMENTAL" in summary) == (hardware == "nvidia")

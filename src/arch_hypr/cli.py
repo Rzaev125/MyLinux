@@ -52,6 +52,7 @@ def main(argv=None) -> int:
     runtime = None
     temporary = None
     owned_runtime = False
+    message = None
     try:
         if mode is not InstallMode.DRY_RUN:
             errors = preflight_errors()
@@ -65,9 +66,12 @@ def main(argv=None) -> int:
         else:
             choices, plain = collect_interactive(disks, input_fn=input, getpass_fn=getpass)
         profile = compose_profile(choices.hardware, choices.software)
+        selected_disk = next(disk for disk in disks if disk.path.as_posix() == choices.device.as_posix())
         print(f"Plan: {mode.value}; {choices.device.as_posix()}; {choices.disk_size_bytes} bytes; "
               f"{choices.hostname}; user {choices.username}; {choices.hardware.value}/{choices.software.value}; "
               f"LUKS2 {'enabled' if choices.encryption else 'disabled'}")
+        print(f"Disk model: {selected_disk.model}")
+        print("Partition scheme: 1 GiB FAT32 ESP + Btrfs remainder")
         print(f"Timezone: {choices.timezone}; keymap: {choices.keymap}; locale: {choices.locale}")
         print("Packages: " + ", ".join(profile.packages))
         print("Services: " + ", ".join(profile.services))
@@ -90,20 +94,27 @@ def main(argv=None) -> int:
         prepared = InstallerOrchestrator(runner, runtime_dir=runtime).execute(choices, plain, mode, confirmation)
         if mode is InstallMode.DRY_RUN:
             _export(prepared, args.output_dir)
-        print("Completed. Reboot manually when ready." if mode is InstallMode.INSTALL else "Completed.")
-        return 0
+    except KeyboardInterrupt:
+        message = "installation interrupted"
     except (ValueError, RuntimeError, OSError, EOFError) as error:
         message = str(error)
         if plain is not None:
             for secret in sorted(filter(None, (plain.login_password, plain.luks_passphrase)), key=len, reverse=True):
                 message = message.replace(secret, "<redacted>")
+    finally:
+        try:
+            if temporary is not None:
+                temporary.cleanup()
+            elif owned_runtime:
+                shutil.rmtree(runtime)
+        except (Exception, KeyboardInterrupt):
+            cleanup_message = "runtime cleanup failed; private runtime may remain"
+            message = f"{message}; {cleanup_message}" if message else cleanup_message
+    if message is not None:
         print(f"Error: {message}", file=sys.stderr)
         return 2
-    finally:
-        if temporary is not None:
-            temporary.cleanup()
-        elif owned_runtime:
-            shutil.rmtree(runtime)
+    print("Completed. Reboot manually when ready." if mode is InstallMode.INSTALL else "Completed.")
+    return 0
 
 
 if __name__ == "__main__":

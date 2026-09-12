@@ -1,6 +1,7 @@
 """Catch unsafe execution branches, stale targets, and leaked credentials."""
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -140,3 +141,24 @@ def test_disk_changed_during_hashing_blocks_upstream(choices, plain_secrets, tmp
         app_at(tmp_path, runner).execute(choices, plain_secrets, InstallMode.INSTALL, "/dev/sda")
     assert not any(argv[0] == "archinstall" for argv, _ in runner.calls)
     assert not (tmp_path / "creds.json").exists()
+
+
+def test_foreign_runtime_owner_rejected_before_writes(choices, plain_secrets, tmp_path, monkeypatch):
+    # Keep real filesystem metadata; model a process with a different effective UID.
+    before = tmp_path.stat()
+    monkeypatch.setattr(os, "geteuid", lambda: before.st_uid + 1, raising=False)
+    app = app_at(tmp_path)
+    with pytest.raises(ValueError, match="owner"):
+        app.prepare(choices, plain_secrets)
+    assert not app.runner.calls
+    assert not list(tmp_path.iterdir())
+    assert tmp_path.stat().st_mode == before.st_mode
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX runtime ownership/mode contract")
+def test_current_posix_owner_runtime_remains_private(choices, plain_secrets, tmp_path):
+    prepared = app_at(tmp_path).prepare(choices, plain_secrets)
+    assert tmp_path.stat().st_uid == os.geteuid()
+    assert tmp_path.stat().st_mode & 0o777 == 0o700
+    assert prepared.creds_path.stat().st_uid == os.geteuid()
+    assert prepared.creds_path.stat().st_mode & 0o777 == 0o600

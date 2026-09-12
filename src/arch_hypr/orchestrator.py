@@ -2,7 +2,6 @@
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-import json
 import os
 
 from .archinstall_adapter import archinstall_argv, build_payload, hash_secrets, write_secure_payload
@@ -46,6 +45,11 @@ class InstallerOrchestrator:
         for path in (self.runtime_dir, *self.runtime_dir.parents):
             if is_link(path):
                 raise ValueError("runtime directory must not contain links")
+        if self.runtime_dir.exists():
+            if not self.runtime_dir.is_dir():
+                raise ValueError("runtime path must be a directory")
+            if hasattr(os, "geteuid") and self.runtime_dir.stat().st_uid != os.geteuid():
+                raise ValueError("runtime directory owner must be the current user")
         for name in ("config.json", "creds.json", "payload"):
             if os.path.lexists(self.runtime_dir / name):
                 raise FileExistsError(f"runtime destination already exists: {name}")
@@ -83,21 +87,20 @@ class InstallerOrchestrator:
             if mode is not InstallMode.DRY_RUN:
                 self._verify_disk(choices)
                 print("Validating upstream configuration" if mode is InstallMode.VALIDATE_UPSTREAM else "Installing selected disk")
-                credentials = json.loads(prepared.creds_path.read_text(encoding="utf-8"))
-                known_secrets = (plain_secrets.login_password, plain_secrets.luks_passphrase,
-                                 credentials["users"][0]["enc_password"])
                 try:
                     result = self.runner.run(archinstall_argv(
                         prepared.config_path, prepared.creds_path,
                         dry_run=mode is InstallMode.VALIDATE_UPSTREAM,
                     ))
-                    if result.returncode != 0:
-                        raise RuntimeError(result.stderr.strip() or "archinstall failed")
-                except (RuntimeError, OSError) as error:
-                    message = str(error)
-                    for secret in sorted(filter(None, known_secrets), key=len, reverse=True):
-                        message = message.replace(secret, "<redacted>")
-                    raise RuntimeError(message) from None
+                except Exception:
+                    # Diagnostics can contain serialized credentials in arbitrary encodings.
+                    raise RuntimeError("archinstall execution failed; inspect local archinstall logs") from None
+                if result.returncode != 0:
+                    code = result.returncode if type(result.returncode) is int else "unknown"
+                    raise RuntimeError(f"archinstall failed (exit {code}); inspect local archinstall logs")
             return prepared
         finally:
-            (self.runtime_dir / "creds.json").unlink(missing_ok=True)
+            try:
+                (self.runtime_dir / "creds.json").unlink(missing_ok=True)
+            except (OSError, KeyboardInterrupt):
+                raise RuntimeError("credential cleanup failed; private runtime may remain") from None
