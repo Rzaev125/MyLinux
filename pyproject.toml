@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arch-hypr-installer"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "pytest-cov>=6.0"]
+
+[project.scripts]
+arch-hypr-installer = "arch_hypr.cli:main"
+
+[tool.setuptools.package-data]
+arch_hypr = ["resources/**/*.json", "resources/**/*.lua", "resources/**/*.toml", "resources/**/*.py"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
