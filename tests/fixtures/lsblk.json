@@ -2,7 +2,10 @@
   "blockdevices": [
     {"name":"nvme0n1","path":"/dev/nvme0n1","type":"disk","size":512110190592,"model":"Work SSD","ro":false,"rm":false,"mountpoints":[null],"pkname":null},
     {"name":"sda","path":"/dev/sda","type":"disk","size":128035676160,"model":"Target SSD","ro":false,"rm":false,"mountpoints":[null],"pkname":null},
-    {"name":"sdb","path":"/dev/sdb","type":"disk","size":34359738368,"model":"ARCHISO","ro":false,"rm":true,"mountpoints":[null],"pkname":null},
-    {"name":"sdb1","path":"/dev/sdb1","type":"part","size":2147483648,"model":null,"ro":false,"rm":true,"mountpoints":["/run/archiso/bootmnt"],"pkname":"sdb"}
+    {"name":"sdb","path":"/dev/sdb","type":"disk","size":34359738368,"model":"ARCHISO","ro":false,"rm":true,"mountpoints":[null],"pkname":null,"children":[
+      {"name":"sdb1","path":"/dev/sdb1","type":"part","size":2147483648,"model":null,"ro":false,"rm":true,"mountpoints":["/run/archiso/bootmnt"],"pkname":"sdb"}
+    ]},
+    {"name":"sdc","path":"/dev/sdc","type":"disk","size":34359738368,"model":"Read-only SSD","ro":true,"rm":false,"mountpoints":[null],"pkname":null},
+    {"name":"sdd","path":"/dev/sdd","type":"disk","size":4294967296,"model":"Too small","ro":false,"rm":false,"mountpoints":[null],"pkname":null}
   ]
 }

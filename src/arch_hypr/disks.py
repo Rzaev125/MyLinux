@@ -1,5 +1,6 @@
 from pathlib import Path, PurePosixPath
 import json
+import re
 
 from .commands import CommandRunner
 from .domain import Disk, DomainError
@@ -14,16 +15,29 @@ LSBLK_ARGS = (
 )
 
 
-def parse_disks(payload: dict, live_source: Path | None) -> tuple[Disk, ...]:
-    devices = payload.get("blockdevices", [])
-    live_parent = None
+def _walk_devices(devices: list[dict], disk_ancestor: dict | None = None):
     for item in devices:
-        if item.get("path") == (live_source.as_posix() if live_source else None):
-            live_parent = item.get("pkname") or item.get("name")
-            break
+        ancestor = item if item.get("type") == "disk" else disk_ancestor
+        yield item, ancestor
+        yield from _walk_devices(item.get("children") or [], ancestor)
+
+
+def parse_disks(payload: dict, live_source: Path | None) -> tuple[Disk, ...]:
+    devices = tuple(_walk_devices(payload.get("blockdevices", [])))
+    live_disk_path = None
+    if live_source is not None:
+        source = live_source.as_posix()
+        for item, disk_ancestor in devices:
+            if item.get("path") == source:
+                if disk_ancestor is None or not disk_ancestor.get("path"):
+                    raise DomainError("live ISO source has no disk ancestor")
+                live_disk_path = disk_ancestor["path"]
+                break
+        if live_disk_path is None:
+            raise DomainError("live ISO source was not found in lsblk")
 
     result = []
-    for item in devices:
+    for item, _ in devices:
         if item.get("type") != "disk":
             continue
         result.append(Disk(
@@ -32,7 +46,7 @@ def parse_disks(payload: dict, live_source: Path | None) -> tuple[Disk, ...]:
             size_bytes=int(item["size"]),
             removable=bool(item.get("rm")),
             read_only=bool(item.get("ro")),
-            live_media=item.get("name") == live_parent,
+            live_media=item.get("path") == live_disk_path,
         ))
     return tuple(result)
 
@@ -49,20 +63,25 @@ def _find_live_source(runner: CommandRunner) -> Path:
     if result.returncode != 0:
         raise DomainError(f"findmnt failed: {result.stderr.strip()}")
 
-    source = result.stdout.strip()
-    if not source:
-        raise DomainError("findmnt did not identify the live ISO source")
+    lines = result.stdout.splitlines()
+    if len(lines) != 1:
+        raise DomainError("findmnt returned an invalid live ISO source")
+    source = lines[0].strip()
+    if not re.fullmatch(r"/dev/[^\s/]+(?:/[^\s/]+)*", source):
+        raise DomainError("findmnt returned an invalid live ISO source")
     return PurePosixPath(source)
 
 
-def discover_disks(
-    runner: CommandRunner, live_source: Path | None = None,
-) -> tuple[Disk, ...]:
-    resolved_live_source = live_source or _find_live_source(runner)
+def discover_disks(runner: CommandRunner) -> tuple[Disk, ...]:
+    live_source = _find_live_source(runner)
     result = runner.run(LSBLK_ARGS)
     if result.returncode != 0:
         raise DomainError(f"lsblk failed: {result.stderr.strip()}")
-    return parse_disks(json.loads(result.stdout), resolved_live_source)
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise DomainError("lsblk returned invalid JSON") from error
+    return parse_disks(payload, live_source)
 
 
 def require_exact_confirmation(device: Path, typed: str) -> None:
