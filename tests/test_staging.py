@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import arch_hypr.staging as staging
 from arch_hypr.staging import stage_payload
 
 
@@ -24,6 +25,20 @@ def load_post_install(path: Path):
         if original_pwd is None:
             sys.modules.pop("pwd", None)
     return module
+
+
+def make_directory_link(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as error:
+        if sys.platform != "win32":
+            pytest.skip(f"directory links are unavailable: {error}")
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
 
 def test_stage_contains_versioned_plan_and_modular_hypr_config(tmp_path, choices, profile):
@@ -112,12 +127,12 @@ def test_post_install_applies_profile_idempotently_and_preserves_user_overrides(
     assert (target / "etc/arch-hypr/profile-version").read_text(encoding="utf-8") == "1\n"
     assert systemctl_calls == [
         (
-            ["systemctl", "enable", "NetworkManager.service", "greetd.service"],
+            ["systemctl", "enable", "--", "NetworkManager.service", "greetd.service"],
             True,
             False,
         ),
         (
-            ["systemctl", "enable", "NetworkManager.service", "greetd.service"],
+            ["systemctl", "enable", "--", "NetworkManager.service", "greetd.service"],
             True,
             False,
         ),
@@ -177,6 +192,197 @@ def test_post_install_rejects_invalid_username_before_account_lookup(
     assert account_lookups == []
 
 
+def test_post_install_rejects_linked_payload_root_before_any_write(
+    tmp_path, choices, profile, monkeypatch
+):
+    real_payload = tmp_path / "real-payload"
+    stage_payload(real_payload, choices, profile)
+    linked_payload = tmp_path / "linked-payload"
+    make_directory_link(linked_payload, real_payload)
+    post_install = load_post_install(real_payload / "post_install.py")
+    target = tmp_path / "target"
+    target.mkdir()
+    monkeypatch.setattr(post_install.os, "chown", lambda *args, **kwargs: None, raising=False)
+
+    with pytest.raises(RuntimeError, match="link is not allowed"):
+        post_install.apply_payload(
+            payload=linked_payload,
+            root=target,
+            username="alex",
+            account=SimpleNamespace(pw_dir="/home/alex", pw_uid=1234, pw_gid=1234),
+            run_command=lambda *args, **kwargs: None,
+        )
+
+    assert list(target.iterdir()) == []
+
+
+def test_post_install_rejects_linked_payload_home_before_any_write(
+    tmp_path, choices, profile, monkeypatch
+):
+    payload = tmp_path / "payload"
+    stage_payload(payload, choices, profile)
+    external_home = tmp_path / "external-home"
+    (payload / "home").rename(external_home)
+    make_directory_link(payload / "home", external_home)
+    post_install = load_post_install(payload / "post_install.py")
+    target = tmp_path / "target"
+    target.mkdir()
+    monkeypatch.setattr(post_install.os, "chown", lambda *args, **kwargs: None, raising=False)
+
+    with pytest.raises(RuntimeError, match="link is not allowed"):
+        post_install.apply_payload(
+            payload=payload,
+            root=target,
+            username="alex",
+            account=SimpleNamespace(pw_dir="/home/alex", pw_uid=1234, pw_gid=1234),
+            run_command=lambda *args, **kwargs: None,
+        )
+
+    assert list(target.iterdir()) == []
+
+
+@pytest.mark.parametrize("linked_component", ["home", "user"])
+def test_post_install_rejects_linked_home_ancestor_before_any_write(
+    tmp_path, choices, profile, monkeypatch, linked_component
+):
+    payload = tmp_path / "payload"
+    stage_payload(payload, choices, profile)
+    post_install = load_post_install(payload / "post_install.py")
+    target = tmp_path / "target"
+    outside = tmp_path / "outside"
+    target.mkdir()
+    outside.mkdir()
+    if linked_component == "home":
+        make_directory_link(target / "home", outside)
+    else:
+        (target / "home").mkdir()
+        make_directory_link(target / "home/alex", outside)
+    monkeypatch.setattr(post_install.os, "chown", lambda *args, **kwargs: None, raising=False)
+
+    with pytest.raises(RuntimeError, match="link is not allowed"):
+        post_install.apply_payload(
+            payload=payload,
+            root=target,
+            username="alex",
+            account=SimpleNamespace(pw_dir="/home/alex", pw_uid=1234, pw_gid=1234),
+            run_command=lambda *args, **kwargs: None,
+        )
+
+    assert list(outside.iterdir()) == []
+    assert not (target / "etc/greetd/config.toml").exists()
+
+
+def test_post_install_rejects_traversal_in_passwd_home_before_any_write(
+    tmp_path, choices, profile, monkeypatch
+):
+    payload = tmp_path / "payload"
+    stage_payload(payload, choices, profile)
+    post_install = load_post_install(payload / "post_install.py")
+    target = tmp_path / "target"
+    target.mkdir()
+    escaped_home = tmp_path / "escaped-home"
+    monkeypatch.setattr(post_install.os, "chown", lambda *args, **kwargs: None, raising=False)
+
+    with pytest.raises(RuntimeError, match="invalid account home"):
+        post_install.apply_payload(
+            payload=payload,
+            root=target,
+            username="alex",
+            account=SimpleNamespace(
+                pw_dir="/home/alex/../../../escaped-home", pw_uid=1234, pw_gid=1234
+            ),
+            run_command=lambda *args, **kwargs: None,
+        )
+
+    assert not escaped_home.exists()
+    assert list(target.iterdir()) == []
+
+
+@pytest.mark.parametrize("linked_component", ["directory", "file"])
+def test_post_install_rejects_linked_profile_version_path_before_any_write(
+    tmp_path, choices, profile, monkeypatch, linked_component
+):
+    payload = tmp_path / "payload"
+    stage_payload(payload, choices, profile)
+    post_install = load_post_install(payload / "post_install.py")
+    target = tmp_path / "target"
+    outside = tmp_path / "outside"
+    (target / "etc").mkdir(parents=True)
+    outside.mkdir()
+    if linked_component == "directory":
+        make_directory_link(target / "etc/arch-hypr", outside)
+    else:
+        (target / "etc/arch-hypr").mkdir()
+        make_directory_link(target / "etc/arch-hypr/profile-version", outside)
+    monkeypatch.setattr(post_install.os, "chown", lambda *args, **kwargs: None, raising=False)
+
+    with pytest.raises(RuntimeError, match="link is not allowed"):
+        post_install.apply_payload(
+            payload=payload,
+            root=target,
+            username="alex",
+            account=SimpleNamespace(pw_dir="/home/alex", pw_uid=1234, pw_gid=1234),
+            run_command=lambda *args, **kwargs: None,
+        )
+
+    assert list(outside.iterdir()) == []
+    assert not (target / "etc/greetd/config.toml").exists()
+
+
+@pytest.mark.parametrize("service", ["--now", "--force", "--global"])
+def test_post_install_rejects_systemctl_option_tokens(
+    tmp_path, choices, profile, monkeypatch, service
+):
+    payload = tmp_path / "payload"
+    stage_payload(payload, choices, profile)
+    plan_path = payload / "profile-plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["services"] = [service]
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    post_install = load_post_install(payload / "post_install.py")
+    target = tmp_path / "target"
+    target.mkdir()
+    commands = []
+    monkeypatch.setattr(post_install.os, "chown", lambda *args, **kwargs: None, raising=False)
+
+    with pytest.raises(RuntimeError, match="invalid service list"):
+        post_install.apply_payload(
+            payload=payload,
+            root=target,
+            username="alex",
+            account=SimpleNamespace(pw_dir="/home/alex", pw_uid=1234, pw_gid=1234),
+            run_command=lambda *args, **kwargs: commands.append((args, kwargs)),
+        )
+
+    assert commands == []
+    assert list(target.iterdir()) == []
+
+
+@pytest.mark.parametrize("linked_source", ["root", "descendant"])
+def test_stage_rejects_package_resource_links_before_creating_destination(
+    tmp_path, choices, profile, monkeypatch, linked_source
+):
+    package = tmp_path / "package"
+    resources = package / "resources"
+    (resources / "home").mkdir(parents=True)
+    (resources / "post_install.py").write_text("pass\n", encoding="utf-8")
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "escaped.conf").write_text("external\n", encoding="utf-8")
+    if linked_source == "root":
+        make_directory_link(resources / "rootfs", external)
+    else:
+        (resources / "rootfs").mkdir()
+        make_directory_link(resources / "rootfs/linked", external)
+    monkeypatch.setattr(staging, "files", lambda package_name: package)
+    destination = tmp_path / "payload"
+
+    with pytest.raises(RuntimeError, match="resource link is not allowed"):
+        stage_payload(destination, choices, profile)
+
+    assert not destination.exists()
+
+
 def test_post_install_rejects_a_symlink_in_the_destination(
     tmp_path, choices, profile, monkeypatch
 ):
@@ -187,18 +393,10 @@ def test_post_install_rejects_a_symlink_in_the_destination(
     outside = tmp_path / "outside"
     target.mkdir()
     outside.mkdir()
-    try:
-        (target / "etc").symlink_to(outside, target_is_directory=True)
-    except OSError:
-        subprocess.run(
-            ["cmd", "/c", "mklink", "/J", str(target / "etc"), str(outside)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+    make_directory_link(target / "etc", outside)
     monkeypatch.setattr(post_install.os, "chown", lambda *args, **kwargs: None, raising=False)
 
-    with pytest.raises(RuntimeError, match="destination symlink is not allowed"):
+    with pytest.raises(RuntimeError, match="link is not allowed"):
         post_install.apply_payload(
             payload=payload,
             root=target,
