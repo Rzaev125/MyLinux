@@ -11,6 +11,16 @@ from arch_hypr.ui import collect_interactive, load_answers, read_destructive_con
 from test_orchestrator import InstallRunner
 
 FIXTURES = Path(__file__).parent / "fixtures"
+REPO_ROOT = Path(__file__).parents[1]
+
+
+def test_archiso_smoke_validates_both_fixtures_without_installing():
+    script = (REPO_ROOT / "scripts" / "archiso-smoke.sh").read_text()
+    assert "set -euo pipefail" in script
+    assert "answers-amd-encrypted.json" in script
+    assert "answers-intel-plain.json" in script
+    assert "--validate-upstream" in script
+    assert "--install" not in script
 
 
 @pytest.mark.parametrize("args", [[], ["--dry-run", "--install"], ["--install", "--output-dir", "out"], ["--dry-run"]])
