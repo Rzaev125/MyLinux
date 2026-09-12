@@ -1,1 +1,6 @@
 /archlinux-2026.09.01-x86_64.iso
+__pycache__/
+*.py[cod]
+.venv/
+.coverage
+htmlcov/
