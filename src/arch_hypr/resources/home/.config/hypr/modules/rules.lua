@@ -1,0 +1,1 @@
+-- Version 1 intentionally defines no global window rules.

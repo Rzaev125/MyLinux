@@ -15,7 +15,16 @@ dev = ["pytest>=8.3", "pytest-cov>=6.0"]
 arch-hypr-installer = "arch_hypr.cli:main"
 
 [tool.setuptools.package-data]
-arch_hypr = ["resources/**/*.json", "resources/**/*.lua", "resources/**/*.toml", "resources/**/*.py"]
+arch_hypr = [
+    "resources/**/*.json",
+    "resources/**/*.lua",
+    "resources/**/*.toml",
+    "resources/**/*.py",
+    "resources/home/.config/hypr/*.lua",
+    "resources/home/.config/hypr/modules/*.lua",
+    "resources/home/.config/hypr/local/*.lua",
+    "resources/rootfs/etc/systemd/*.conf",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
