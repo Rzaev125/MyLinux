@@ -119,3 +119,80 @@ def test_hash_failure_raises_without_a_hash():
     runner = RecordingRunner(CommandResult(1, "", "openssl failed"))
     with pytest.raises(RuntimeError, match="hashing failed"):
         hash_secrets(PlainSecrets("login-secret", None), runner)
+
+
+def test_existing_destination_is_rejected_without_partial_write(tmp_path):
+    payload = build_payload(
+        choices(True), HashedSecrets("$6$hash", "luks-secret"), profile()
+    )
+    config_path, creds_path = tmp_path / "config.json", tmp_path / "creds.json"
+    creds_path.write_text("sentinel", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        write_secure_payload(payload, config_path, creds_path)
+
+    assert creds_path.read_text(encoding="utf-8") == "sentinel"
+    assert not config_path.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits are unavailable")
+def test_broad_existing_credentials_file_is_not_overwritten(tmp_path):
+    payload = build_payload(
+        choices(True), HashedSecrets("$6$hash", "luks-secret"), profile()
+    )
+    config_path, creds_path = tmp_path / "config.json", tmp_path / "creds.json"
+    creds_path.write_text("sentinel", encoding="utf-8")
+    creds_path.chmod(0o644)
+
+    with pytest.raises(FileExistsError):
+        write_secure_payload(payload, config_path, creds_path)
+
+    assert creds_path.read_text(encoding="utf-8") == "sentinel"
+    assert stat.S_IMODE(creds_path.stat().st_mode) == 0o644
+    assert not config_path.exists()
+
+
+def test_symlink_destination_is_rejected_without_following(tmp_path):
+    payload = build_payload(
+        choices(True), HashedSecrets("$6$hash", "luks-secret"), profile()
+    )
+    config_path = tmp_path / "config.json"
+    target_path, creds_path = tmp_path / "target.json", tmp_path / "creds.json"
+    target_path.write_text("sentinel", encoding="utf-8")
+    try:
+        creds_path.symlink_to(target_path)
+    except (NotImplementedError, OSError):
+        pytest.skip("symlinks are unavailable on this host")
+
+    with pytest.raises(FileExistsError):
+        write_secure_payload(payload, config_path, creds_path)
+
+    assert target_path.read_text(encoding="utf-8") == "sentinel"
+    assert not config_path.exists()
+
+
+def test_identical_config_and_credentials_paths_are_rejected_before_write(tmp_path):
+    payload = build_payload(
+        choices(True), HashedSecrets("$6$hash", "luks-secret"), profile()
+    )
+    shared_path = tmp_path / "payload.json"
+
+    with pytest.raises(ValueError, match="distinct"):
+        write_secure_payload(payload, shared_path, shared_path)
+
+    assert not shared_path.exists()
+
+
+def test_equivalent_config_and_credentials_paths_are_rejected_before_write(tmp_path):
+    payload = build_payload(
+        choices(True), HashedSecrets("$6$hash", "luks-secret"), profile()
+    )
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    config_path = tmp_path / "payload.json"
+    equivalent_creds_path = nested / ".." / "payload.json"
+
+    with pytest.raises(ValueError, match="distinct"):
+        write_secure_payload(payload, config_path, equivalent_creds_path)
+
+    assert not config_path.exists()

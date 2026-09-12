@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import UUID, uuid5
+import errno
 import json
 import os
 
@@ -130,16 +131,30 @@ def hash_secrets(plain, runner) -> HashedSecrets:
 
 
 def _write_private_json(path: Path, value: dict) -> None:
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(path, flags, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
         json.dump(value, stream, ensure_ascii=False, sort_keys=True)
         stream.write("\n")
 
 
+def _canonical_destination(path: Path) -> str:
+    return os.path.normcase(os.fspath(path.resolve(strict=False)))
+
+
+def _validate_destinations(config: Path, creds: Path) -> None:
+    if _canonical_destination(config) == _canonical_destination(creds):
+        raise ValueError("config and credentials paths must be distinct")
+    for path in (config, creds):
+        if os.path.lexists(path):
+            raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), path)
+
+
 def write_secure_payload(
     payload: ArchinstallPayload, config: Path, creds: Path
 ) -> None:
+    _validate_destinations(config, creds)
     _write_private_json(config, payload.config)
     _write_private_json(creds, payload.creds)
 
